@@ -3,12 +3,14 @@
 Very brief instructions:
 ```
 cd ~/src
-git clone https://github.com/keszybz/mkosi
-git clone https://github.com/keszybz/mkosi-initrd
+git clone https://github.com/systemd/mkosi
+git clone https://github.com/systemd/mkosi-initrd
 cd mkosi-initrd
 mkdir mkosi.cache
-dnf download kernel-core-5.12.5-300.fc34.x86_64
-sudo PYTHONPATH=$HOME/src/mkosi python3 -m mkosi -f -o initrd.cpio.zstd
+KVER=$(uname -r)
+. /etc/os-release
+sudo PYTHONPATH=$HOME/src/mkosi python3 -m mkosi -f --default $ID.mkosi --finalize-script=$ID.mkosi.finalize --image-version=$KVER --environment=KERNEL_VERSION=$KVER -o initrd-$KVER.cpio.zstd
+
 ```
 
 Requirements:

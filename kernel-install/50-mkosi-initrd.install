@@ -24,8 +24,14 @@ case "$COMMAND" in
         (
             [ "$KERNEL_INSTALL_VERBOSE" -gt 0 ] && set -x
 
-            mkosi --default /usr/lib/mkosi-initrd/fedora.mkosi \
-                  --finalize-script=/usr/lib/mkosi-initrd/mkosi.finalize \
+            if [ -r /etc/os-release ]; then
+                . /etc/os-release
+            elif [ -r /usr/lib/os-release ]; then
+                . /usr/lib/os-release
+            fi
+
+            mkosi --default /usr/lib/mkosi-initrd/"$ID".mkosi \
+                  --finalize-script=/usr/lib/mkosi-initrd/"$ID".mkosi.finalize \
                   --image-version="$KERNEL_VERSION" \
                   --environment=KERNEL_VERSION="$KERNEL_VERSION" \
                   -o "${KERNEL_INSTALL_STAGING_AREA}/initrd"

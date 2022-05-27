@@ -1,0 +1,189 @@
+#!/usr/bin/env python3
+
+import ast
+import functools
+import os
+import pathlib
+import re
+import shutil
+import subprocess
+import sys
+import xattr
+
+def dictify(f):
+    def wrapper(*args, **kwargs):
+        return dict(f(*args, **kwargs))
+    return functools.update_wrapper(wrapper, f)
+
+def buildroot():
+    buildroot = os.getenv('BUILDROOT')
+    buildroot = pathlib.Path(buildroot)
+    return buildroot
+
+@dictify
+def read_os_release(root):
+    try:
+        f = root.joinpath('etc/os-release').open()
+    except FileNotFoundError:
+        f = root.joinpath('usr/lib/os-release').open()
+
+    for line_number, line in enumerate(f, start=1):
+        if not line.strip() or line.startswith('#'):
+            continue
+        if m := re.match(r'([A-Z][A-Z_0-9]+)=(.*)', line):
+            name, val = m.groups()
+            if val and val[0] in '"\'':
+                val = ast.literal_eval(val)
+            yield name, val
+        else:
+            print(f'Bad line {line_number}: {line}', file=sys.stderr)
+
+def update_suffixed(items, name, fallback):
+    value = items.get(name, fallback)
+    if 'mkosi-initrd' in value:
+        return
+    items[name] = value + ' (mkosi-initrd)'
+
+def make_initrd_release(root, out):
+    os_release = read_os_release(root)
+
+    # Replacing fields in the original dictionary should maintain the order
+    update_suffixed(os_release, 'NAME', 'Linux')
+    update_suffixed(os_release, 'PRETTY_NAME', 'Linux')
+    os_release['VARIANT'] = 'mkosi-initrd'
+    os_release['VARIANT_ID'] = 'mkosi-initrd'
+
+    for name, value in os_release.items():
+        if value:
+            print(f'{name}={value!r}', file=out)
+
+    print(f'Writing {out.name} with PRETTY_NAME={os_release["PRETTY_NAME"]!r}')
+
+def make_sysext_release(root, sysext_name, out):
+    os_release = read_os_release(root)
+
+    sysext = {
+        'NAME': sysext_name,
+        'SYSEXT_SCOPE': 'initrd',
+    }
+    for field in ('ID',
+                  'VERSION_ID',
+                  'VERSION_CODENAME',
+                  'PLATFORM_ID',
+                  'SYSEXT_LEVEL',
+
+                  'HOME_URL',
+                  'DOCUMENTATION_URL',
+                  'SUPPORT_URL',
+                  'BUG_REPORT_URL',
+                  'PRIVACY_POLICY_URL'):
+        if value := os_release.get(field):
+            sysext[field] = value
+
+    for name, value in sysext.items():
+        print(f'{name}={value!r}', file=out)
+
+    print(f'Writing {out.name} with NAME={sysext["NAME"]!r}')
+
+def write_initrd_release(root):
+    output = root / 'etc/initrd-release'
+    output.unlink(missing_ok=True)
+
+    with output.open('wt') as out:
+        make_initrd_release(root, out)
+
+    root.joinpath('etc/os-release').unlink(missing_ok=True)
+    root.joinpath('usr/lib/os-release').unlink(missing_ok=True)
+
+    root.joinpath('etc/os-release').symlink_to(output.name)
+
+def write_sysext_release(root, sysext_name):
+    output = root / f"usr/lib/extension-release.d/extension-release.{sysext_name}"
+    output.parent.mkdir(exist_ok=True)
+
+    with output.open('wt') as out:
+        make_sysext_release(root, sysext_name, out)
+
+    print('Setting user.extension-release.strict=0 on the extension-release file')
+    xattr.set(output, 'user.extension-release.strict', '0');
+
+def make_init_symlink(root):
+    init = root / 'init'
+    init.unlink(missing_ok=True)
+    init.symlink_to('usr/lib/systemd/systemd')
+    print(f'Symlinked {init} → usr/lib/systemd/systemd')
+
+def make_sysroot_dir(root):
+    sysroot = root / 'sysroot'
+    sysroot.mkdir(mode=0o755, exist_ok=True)
+    print(f'Created {sysroot}')
+
+def make_debug_shell_emergency(root):
+    unit = root / 'etc/systemd/system/emergency.service'
+    unit.unlink(missing_ok=True)
+    unit.symlink_to('debug-shell.service')
+    print(f'Symlinked {unit} → debug-shell.service')
+
+def mask_units(root):
+    units = [
+        # Dracut installs a rule which sets OPTIONS+="db_persist" on all dm devices [1]
+        # (According to codesearch.debian.net, it is the only user of db_persist.)
+        # Without this, all dm units end up with SYSTEMD_READY=0 and systemd thinks the
+        # device units are missing. The system boots fine, but an attempt to call
+        # daemon-reexec or daemon-reload ends with anything that can be stopped or unmounted
+        # being purged.
+        #
+        # In systemd, we always have cleaned the database on switch-root, since the initial
+        # addition of the initrd-* units in cf843477946451fabf9b5d17eec8ec81515057b6. But
+        # that seems pointless, since initrds need to match the kernel version and are
+        # generally used with the main system in the main version or slightly newer. And
+        # for important devices, db_persist is set. So we end up destroying some of the
+        # state, but not all. Let's just skip the cleanup altogether, and rely on the rules
+        # being idempotent so that we end up in the correct state.
+        #
+        # [1] https://raw.githubusercontent.com/dracutdevs/dracut/2d83bce21bfc874b29c1fb99e8fabb843f038725/modules.d/90dm/11-dm.rules
+        'initrd-udevadm-cleanup-db.service',
+    ]
+
+    subprocess.run(['systemctl', f'--root={root}', 'mask', *units], check=True)
+
+def remove_non_sysext_files(root):
+    var = root / "var"
+    if var.exists():
+        shutil.rmtree(var)
+
+    etc = root / "etc"
+    if etc.exists():
+        # from mkosi import find_files
+        # for path in find_files(etc):
+        #     print(f'WARNING: configuration file: {path}')
+        # … This doesn't work because we also see files from the lower layer
+
+        shutil.rmtree(etc)
+
+
+def do_initrd(root):
+    write_initrd_release(root)
+
+    make_init_symlink(root)
+    make_sysroot_dir(root)
+
+    make_debug_shell_emergency(root)
+
+    mask_units(root)
+
+def do_sysext(root, sysext_name):
+    write_sysext_release(root, sysext_name)
+    remove_non_sysext_files(root)
+
+if __name__ == '__main__':
+    if sys.argv[1] != 'final':
+        exit(0)
+
+    root = buildroot()
+
+    sysext = os.getenv('SYSEXT')
+    if sysext:
+        do_sysext(root, sysext)
+    else:
+        do_initrd(root)

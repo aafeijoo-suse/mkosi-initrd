@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+
+[Distribution]
+# Distribution=opensuse-tumbleweed
+
+[Output]
+ImageId=initrd
+Format=cpio
+ManifestFormat=
+Compress=zstd
+
+# This will create the cache and output directories if they aren't already in place
+Cache=mkosi.cache
+
+[Content]
+BasePackages=conditional
+Packages=
+        kernel-default            # all kernel modules
+
+        systemd
+        udev
+        util-linux
+        util-linux-systemd
+
+        # File system checkers for supported root file systems
+        # btrfs: fsck.btrfs is a dummy, checking is done in the kernel.
+        # ext2, ext3, ext4
+        e2fsprogs
+        # xfs
+        xfsprogs
+
+        bash                      # for emergency logins
+        less                      # for systemctl
+
+        # Hardware support
+        lvm2
+
+# This option is currently only implemented for distributions using dnf
+#RemovePackages=
+        # Various packages pull shadow-utils to create users
+        #shadow
+
+# TODO: improve this list, we can remove more useless files
+RemoveFiles=
+        /lib/modules/*/vmlinuz
+        /usr/lib/systemd/catalog  # we don't need this after the binary catalogs have been built
+        /etc/udev/hwdb.d
+        /usr/lib/udev/hwdb.d
+        /usr/share/doc
+        /usr/share/help
+        /usr/share/info
+        /usr/share/licenses
+        /usr/share/locale
+        /usr/share/man
+        /usr/share/zsh
+        /var/cache
