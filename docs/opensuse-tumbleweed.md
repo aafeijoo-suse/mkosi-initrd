@@ -26,7 +26,6 @@ We pass `KERNEL_VERSION=…` to tell the `kernel-install` scripts what version t
 
 ```bash
 KVER=`uname -r`
-dnf download kernel-core-$KVER
 sudo PYTHONPATH=$PWD/../mkosi python3 -m mkosi -f --default opensuse-tumbleweed.mkosi --finalize-script=opensuse-tumbleweed.mkosi.finalize --image-version=$KVER --environment=KERNEL_VERSION=$KVER
 ```
 
